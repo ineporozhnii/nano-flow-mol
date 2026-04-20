@@ -1,0 +1,29 @@
+name: nanoflow
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  # Core Python
+  - python=3.11
+  
+  # PyTorch & CUDA
+  - pytorch
+  - pytorch-cuda=12.1 
+  
+  # Chemoinformatics 
+  - rdkit
+  
+  # Standard Data Science Stack
+  - numpy
+  - scipy
+  - matplotlib
+  - tqdm
+  - pip
+  
+  # Python-specific installations
+  - pip:
+      - torch-geometric
+      - pyscf
+      - ase
