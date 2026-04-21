@@ -49,12 +49,6 @@ class EGNNLayer(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, node_dim)
         )
-        # Edge vector field predictor (scalar per edge)
-        self.edge_out_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.SiLU(),
-            nn.Linear(hidden_dim // 2, 1)
-        )
 
     def forward(self, x, h, edge_index, edge_attr, cond):
         row, col = edge_index
@@ -63,16 +57,13 @@ class EGNNLayer(nn.Module):
         # 1. Coordinate updates
         x_msg = (x[row] - x[col]) * self.coord_mlp(m_ij)
         
-        # 2. Edge vector field contribution
-        v_e_ij = self.edge_out_mlp(m_ij)
-        
         # Aggregations
         m_i = scatter(m_ij, row, dim=0, dim_size=h.size(0), reduce='mean')
         dx = scatter(x_msg, row, dim=0, dim_size=x.size(0), reduce='mean')
         
-        # 3. Node updates
+        # 2. Node updates
         dh = self.node_mlp(torch.cat([h, m_i, cond], dim=-1))
-        return dx, dh, v_e_ij
+        return dx, dh
 
 class EGNNVectorField(nn.Module):
     def __init__(self, in_node_dim=5, hidden_dim=128, num_layers=6):
@@ -112,13 +103,11 @@ class EGNNVectorField(nn.Module):
         edge_attr = self.dist_expand(dist)
         
         v_x = torch.zeros_like(x)
-        v_e_sum = torch.zeros((edge_index.size(1), 1), device=x.device)
         
         for layer in self.layers:
-            dx, dh, v_e_layer = layer(x, h, edge_index, edge_attr, cond)
+            dx, dh = layer(x, h, edge_index, edge_attr, cond)
             v_x = v_x + dx
             h = h + dh
-            v_e_sum = v_e_sum + v_e_layer
             
         v_h = self.h_out(h)
         
@@ -126,7 +115,7 @@ class EGNNVectorField(nn.Module):
         v_x_mean = scatter(v_x, batch, dim=0, reduce='mean')
         v_x = v_x - v_x_mean[batch]
         
-        return v_x, v_h, v_e_sum
+        return v_x, v_h
 
 class ResBlock(nn.Module):
     def __init__(self, dim):

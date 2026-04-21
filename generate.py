@@ -19,7 +19,6 @@ def generate():
     parser.add_argument("--gap", type=float, default=5.0, help="Target HOMO-LUMO gap in eV")
     parser.add_argument("--num_mols", type=int, default=5, help="Number of molecules to generate")
     parser.add_argument("--out_dir", type=str, default="generated", help="Output directory")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Adjacency threshold for bonding")
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -55,7 +54,7 @@ def generate():
     fm = OCFM(prior_scale=config.get("prior_scale", 0.7))
     print(f"Generating {args.num_mols} molecules (sizes: {num_nodes_list})...")
     
-    gen_x, gen_h, gen_e, gen_batch, gen_edges = fm.generate(model, num_nodes_list, y_cond, device, steps=100)
+    gen_x, gen_h, gen_batch = fm.generate(model, num_nodes_list, y_cond, device, steps=100)
     
     atom_types = gen_h.argmax(dim=-1)
     os.makedirs(args.out_dir, exist_ok=True)
@@ -66,40 +65,24 @@ def generate():
         x_i = gen_x[mask].cpu().numpy()
         types_i = atom_types[mask].cpu().numpy()
         
-        # Predicted bonds for this molecule
-        e_mask = (gen_batch[gen_edges[0]] == i)
-        e_i = gen_e[e_mask]
-        edges_i = gen_edges[:, e_mask]
-        # Map global batch indices to local 0..N-1 indices
-        local_map = {idx.item(): j for j, idx in enumerate(torch.where(mask)[0])}
-        
-        # Build RWMol with connectivity
+        # Build RDKit molecule
         mol = Chem.RWMol()
-        for t in types_i:
+        conf = Chem.Conformer(len(x_i))
+        for j, t in enumerate(types_i):
             mol.AddAtom(Chem.Atom(ATOM_MAP_INV.get(t.item(), 'C')))
-            
-        # Add bonds based on predicted adjacency threshold
-        for val, u, v in zip(e_i, edges_i[0], edges_i[1]):
-            if val > args.threshold and u < v: # Avoid double edges
-                try:
-                    mol.AddBond(local_map[u.item()], local_map[v.item()], Chem.BondType.SINGLE)
-                except: pass
-                
-        # Finalize and set coords
+            conf.SetAtomPosition(j, (float(x_i[j][0]), float(x_i[j][1]), float(x_i[j][2])))
+        
+        mol.AddConformer(conf)
+        res_mol = mol.GetMol()
+        
         try:
-            res_mol = mol.GetMol()
-            conf = Chem.Conformer(len(x_i))
-            for j, pos in enumerate(x_i):
-                conf.SetAtomPosition(j, (float(pos[0]), float(pos[1]), float(pos[2])))
-            res_mol.AddConformer(conf)
-            
-            # Use RDKit to refine bonds (it will use our connectivity as a skeleton)
+            # Infer bonds from positions
+            rdDetermineBonds.DetermineConnectivity(res_mol)
             rdDetermineBonds.DetermineBondOrders(res_mol)
             valid_count += 1
             status = "VALID"
         except:
             status = "INVALID"
-            res_mol = None
 
         # Save XYZ
         xyz_path = os.path.join(args.out_dir, f"mol_{i}.xyz")

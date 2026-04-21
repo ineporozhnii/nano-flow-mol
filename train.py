@@ -18,7 +18,7 @@ from fm import OCFM
 # HYPERPARAMETERS
 # ==========================================
 BATCH_SIZE = 512    # Increased from 128
-EPOCHS = 10
+EPOCHS = 500
 IN_NODE_DIM = 5
 HIDDEN_DIM = 128
 NUM_LAYERS = 6
@@ -49,80 +49,67 @@ def train():
     os.makedirs(results_dir, exist_ok=True)
     
     history = {
-        "train_flow": [], "train_size": [], "train_edge": [],
-        "val_flow": [], "val_size": [], "val_edge": []
+        "train_flow": [], "train_size": [],
+        "val_flow": [], "val_size": []
     }
     
     for epoch in range(1, EPOCHS + 1):
         model.train(); size_predictor.train()
-        e_flow, e_size, e_edge = 0, 0, 0
+        e_flow, e_size = 0, 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}")
         
         for batch in pbar:
             batch = batch.to(device)
             x1, h1, y, batch_idx = batch.pos, batch.x, batch.y.view(-1, 1), batch.batch
             
-            # 1. Edge Target Reconstruction (Vectorized hashing)
             edge_index = get_fully_connected_edge_index(batch_idx)
-            num_nodes = batch.x.size(0)
-            fc_hash = edge_index[0] * num_nodes + edge_index[1]
-            gt_hash = batch.edge_index_gt[0] * num_nodes + batch.edge_index_gt[1]
-            e1 = torch.isin(fc_hash, gt_hash).float().view(-1, 1)
 
-            # 2. Size loss (Regression NLL)
+            # 1. Size loss (Regression NLL)
             mu, log_var = size_predictor(y)
             true_sizes = scatter(torch.ones_like(batch_idx), batch_idx, dim=0, reduce='sum').view(-1, 1).float()
             loss_size = 0.5 * (log_var + (true_sizes - mu)**2 / torch.exp(log_var)).mean()
             
-            # 3. Flow loss
-            xt, ht, et, t, ux, uh, ue = fm.sample_pt(x1, h1, e1, batch_idx, edge_index)
-            vx, vh, ve = model(xt, ht, t, y, batch_idx, edge_index)
+            # 2. Flow loss
+            xt, ht, t, ux, uh = fm.sample_pt(x1, h1, batch_idx)
+            vx, vh = model(xt, ht, t, y, batch_idx, edge_index)
             
             loss_flow = F.mse_loss(vx, ux) + F.mse_loss(vh, uh)
-            loss_edge = F.mse_loss(ve, ue)
             
-            loss = loss_flow + loss_edge + loss_size
+            loss = loss_flow + loss_size
             
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             
-            e_flow += loss_flow.item(); e_size += loss_size.item(); e_edge += loss_edge.item()
-            pbar.set_postfix({'f': f"{loss_flow.item():.3f}", 's': f"{loss_size.item():.3f}", 'e': f"{loss_edge.item():.3f}"})
+            e_flow += loss_flow.item(); e_size += loss_size.item()
+            pbar.set_postfix({'f': f"{loss_flow.item():.3f}", 's': f"{loss_size.item():.3f}"})
             
         history["train_flow"].append(e_flow/len(train_loader))
         history["train_size"].append(e_size/len(train_loader))
-        history["train_edge"].append(e_edge/len(train_loader))
         
         # Validation
         model.eval(); size_predictor.eval()
-        v_flow, v_size, v_edge = 0, 0, 0
+        v_flow, v_size = 0, 0
         with torch.no_grad():
             for batch in val_loader:
                 batch = batch.to(device)
                 x1, h1, y, batch_idx = batch.pos, batch.x, batch.y.view(-1, 1), batch.batch
                 edge_index = get_fully_connected_edge_index(batch_idx)
-                num_nodes = batch.x.size(0)
-                fc_hash = edge_index[0] * num_nodes + edge_index[1]
-                gt_hash = batch.edge_index_gt[0] * num_nodes + batch.edge_index_gt[1]
-                e1 = torch.isin(fc_hash, gt_hash).float().view(-1, 1)
                 
                 mu, log_var = size_predictor(y)
                 true_sizes = scatter(torch.ones_like(batch_idx), batch_idx, dim=0, reduce='sum').view(-1, 1).float()
                 loss_size = 0.5 * (log_var + (true_sizes - mu)**2 / torch.exp(log_var)).mean()
                 
-                xt, ht, et, t, ux, uh, ue = fm.sample_pt(x1, h1, e1, batch_idx, edge_index)
-                vx, vh, ve = model(xt, ht, t, y, batch_idx, edge_index)
+                xt, ht, t, ux, uh = fm.sample_pt(x1, h1, batch_idx)
+                vx, vh = model(xt, ht, t, y, batch_idx, edge_index)
                 v_flow += (F.mse_loss(vx, ux) + F.mse_loss(vh, uh)).item()
-                v_edge += F.mse_loss(ve, ue).item()
                 v_size += loss_size.item()
                 
         history["val_flow"].append(v_flow/len(val_loader))
         history["val_size"].append(v_size/len(val_loader))
-        history["val_edge"].append(v_edge/len(val_loader))
         
-        print(f"Epoch {epoch} | Val Flow: {history['val_flow'][-1]:.4f} | Size: {history['val_size'][-1]:.4f} | Edge: {history['val_edge'][-1]:.4f}")
+        print(f"Epoch {epoch} | Val Flow: {history['val_flow'][-1]:.4f} | Size: {history['val_size'][-1]:.4f}")
 
     torch.save({'model': model.state_dict(), 'size_predictor': size_predictor.state_dict()}, os.path.join(results_dir, "nano_flow_mol.pt"))
     

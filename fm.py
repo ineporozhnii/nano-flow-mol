@@ -3,19 +3,17 @@ from torch_geometric.utils import scatter
 from graph_utils import get_fully_connected_edge_index
 
 class OCFM:
-    """Optimal Transport Conditional Flow Matching for Coords, Features, and Adjacency"""
+    """Optimal Transport Conditional Flow Matching for Coords and Features"""
     def __init__(self, prior_scale=1.0):
         self.prior_scale = prior_scale
 
-    def sample_pt(self, x1, h1, e1, batch, edge_index):
+    def sample_pt(self, x1, h1, batch):
         """
         x1, h1: node data
-        e1: (num_edges, 1) target adjacency (1.0 for bond, 0.0 otherwise)
         """
         b_size = int(batch.max()) + 1
         t = torch.rand(b_size, 1, device=x1.device)
         t_node = t[batch]
-        t_edge = t[batch[edge_index[0]]] # edge-level time
 
         # 1. Coords
         x0 = torch.randn_like(x1) * self.prior_scale
@@ -28,12 +26,7 @@ class OCFM:
         ht = t_node * h1 + (1 - t_node) * h0
         uh = h1 - h0
         
-        # 3. Adjacency (Edge Flow)
-        e0 = torch.randn_like(e1)
-        et = t_edge * e1 + (1 - t_edge) * e0
-        ue = e1 - e0
-
-        return xt, ht, et, t, ux, uh, ue
+        return xt, ht, t, ux, uh
 
     @torch.no_grad()
     def generate(self, model, num_nodes_list, y_cond, device, steps=100):
@@ -50,15 +43,13 @@ class OCFM:
         h = torch.randn(N, 5, device=device)
         
         edge_index = get_fully_connected_edge_index(batch)
-        e = torch.randn((edge_index.size(1), 1), device=device)
         
         dt = 1.0 / steps
         for i in range(steps):
             t = torch.full((B, 1), i * dt, device=device)
-            vx, vh, ve = model(x, h, t, y_cond, batch, edge_index)
+            vx, vh = model(x, h, t, y_cond, batch, edge_index)
             
             x = x + vx * dt
             h = h + vh * dt
-            e = e + ve * dt
             
-        return x, h, e, batch, edge_index
+        return x, h, batch

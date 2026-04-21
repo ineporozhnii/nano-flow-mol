@@ -72,28 +72,13 @@ class QM9FlowDataset(InMemoryDataset):
                 res_mol = mol.GetMol()
                 res_mol.AddConformer(conf)
                 
-                # Determine bonds from coordinates
-                rdDetermineBonds.DetermineConnectivity(res_mol)
-                
-                # Extract adjacency matrix
-                gt_edge_index = []
-                for bond in res_mol.GetBonds():
-                    u, v = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-                    gt_edge_index.append([u, v])
-                    gt_edge_index.append([v, u])
-                
-                if len(gt_edge_index) == 0:
-                    gt_edge_index = torch.empty((2, 0), dtype=torch.long)
-                else:
-                    gt_edge_index = torch.tensor(gt_edge_index, dtype=torch.long).t().contiguous()
-                
                 pos = torch.tensor(pos_list, dtype=torch.float32)
                 h = torch.tensor(h_list, dtype=torch.float32)
                 
                 # Center coordinates
                 pos = pos - pos.mean(dim=0, keepdim=True)
                 
-                data = Data(pos=pos, x=h, y=torch.tensor([gap_ev]), edge_index_gt=gt_edge_index)
+                data = Data(pos=pos, x=h, y=torch.tensor([gap_ev]))
                 data_list.append(data)
                 
             except Exception as e:
