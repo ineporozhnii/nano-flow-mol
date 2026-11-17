@@ -5,25 +5,20 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  # Core Python
   - python=3.11
-  
-  # PyTorch & CUDA
-  - pytorch
-  - pytorch-cuda=12.1 
-  
-  # Chemoinformatics 
+  - pytorch=2.5
+  - pytorch-cuda=12.1
   - rdkit
-  
-  # Standard Data Science Stack
   - numpy
   - scipy
   - matplotlib
+  - pillow
   - tqdm
   - pip
-  
-  # Python-specific installations
   - pip:
       - torch-geometric
       - pyscf
-      - ase
+      - geometric
+      - gpu4pyscf-cuda12x
+      - cupy-cuda12x[ctk]
+      - xyzrender

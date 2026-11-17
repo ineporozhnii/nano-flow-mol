@@ -209,3 +209,8 @@ __marimo__/
 misc/
 results/
 generated/
+# nano-flow
+data/
+logs/
+nohup.out
+*.log
