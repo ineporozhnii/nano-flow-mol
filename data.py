@@ -1,20 +1,46 @@
+"""QM9 loading: raw .xyz files -> PyG InMemoryDataset with positions, one-hot atom types,
+HOMO-LUMO gap (eV) and canonical SMILES, plus a seeded train/val/test split."""
 import os
 import glob
+
 import torch
 from tqdm import tqdm
 from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.loader import DataLoader
-from rdkit import Chem
-from rdkit.Chem import rdDetermineBonds
 
-# Standard QM9 Atom Types
+HARTREE_TO_EV = 27.211386
 ATOM_MAP = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
+ATOM_MAP_INV = {v: k for k, v in ATOM_MAP.items()}
 NUM_ATOM_TYPES = len(ATOM_MAP)
+GAP_COLUMN = 9  # index of the gap (Hartree) in the QM9 property line, after the "gdb <id>" tag
+
+
+def _float(s):
+    # QM9 uses Mathematica-style exponents, e.g. "1.2*^-6"
+    return float(s.replace('*^', 'e'))
+
+
+def parse_qm9_xyz(file_path):
+    """Returns (symbols, positions [N,3], gap_ev, smiles) for one QM9 .xyz file."""
+    with open(file_path) as f:
+        lines = f.readlines()
+    n = int(lines[0])
+    props = lines[1].split()
+    gap_ev = _float(props[GAP_COLUMN]) * HARTREE_TO_EV
+    symbols, pos = [], []
+    for line in lines[2:2 + n]:
+        parts = line.split()
+        symbols.append(parts[0])
+        pos.append([_float(p) for p in parts[1:4]])
+    # line n+3 holds "GDB-SMILES  B3LYP-relaxed-SMILES"; use the relaxed one
+    smiles = lines[3 + n].split()[-1]
+    return symbols, pos, gap_ev, smiles
+
 
 class QM9FlowDataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
         super().__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+        self.load(self.processed_paths[0])
 
     @property
     def raw_file_names(self):
@@ -22,96 +48,64 @@ class QM9FlowDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return ['qm9_flow_sparse_bonds.pt']
+        return ['qm9_flow_v2.pt']
 
     def download(self):
-        pass
+        raise FileNotFoundError(
+            f"QM9 raw files not found in {self.raw_dir}. Run `python download_dataset.py` first.")
 
     def process(self):
-        file_paths = glob.glob(os.path.join(self.raw_dir, "*.xyz"))
-        if len(file_paths) == 0:
+        file_paths = sorted(glob.glob(os.path.join(self.raw_dir, "*.xyz")))
+        if not file_paths:
             raise FileNotFoundError(f"No .xyz files found in {self.raw_dir}.")
 
         data_list = []
-        skipped = 0
-        
-        print(f"Processing {len(file_paths)} molecules with robust bond extraction...")
-        for file_path in tqdm(file_paths):
-            try:
-                with open(file_path, 'r') as f:
-                    lines = f.readlines()
-                    
-                num_atoms = int(lines[0].strip())
-                props = lines[1].strip().split()
-                # props[9] is gap in Hartree
-                gap_ev = float(props[9]) * 27.2114
-                
-                pos_list = []
-                h_list = []
-                
-                # We build the RDKit molecule manually instead of using MolFromXYZBlock
-                # to avoid parser issues with the QM9 properties line.
-                mol = Chem.RWMol()
-                conf = Chem.Conformer(num_atoms)
-                
-                for j in range(num_atoms):
-                    parts = lines[2 + j].strip().split()
-                    symbol = parts[0]
-                    x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-                    
-                    # Add to RDKit mol
-                    idx = mol.AddAtom(Chem.Atom(symbol))
-                    conf.SetAtomPosition(idx, (x, y, z))
-                    
-                    # Add to lists
-                    pos_list.append([x, y, z])
-                    one_hot = [0.0] * NUM_ATOM_TYPES
-                    one_hot[ATOM_MAP[symbol]] = 1.0
-                    h_list.append(one_hot)
+        for file_path in tqdm(file_paths, desc="Processing QM9"):
+            symbols, pos, gap_ev, smiles = parse_qm9_xyz(file_path)
+            pos = torch.tensor(pos, dtype=torch.float32)
+            pos = pos - pos.mean(dim=0, keepdim=True)
+            types = torch.tensor([ATOM_MAP[s] for s in symbols])
+            h = torch.nn.functional.one_hot(types, NUM_ATOM_TYPES).float()
+            data_list.append(Data(pos=pos, x=h, y=torch.tensor([gap_ev]), smiles=smiles))
 
-                res_mol = mol.GetMol()
-                res_mol.AddConformer(conf)
-                
-                pos = torch.tensor(pos_list, dtype=torch.float32)
-                h = torch.tensor(h_list, dtype=torch.float32)
-                
-                # Center coordinates
-                pos = pos - pos.mean(dim=0, keepdim=True)
-                
-                data = Data(pos=pos, x=h, y=torch.tensor([gap_ev]))
-                data_list.append(data)
-                
-            except Exception as e:
-                skipped += 1
-                continue
+        print(f"Saving {len(data_list)} molecules.")
+        self.save(data_list, self.processed_paths[0])
 
-        print(f"Saving {len(data_list)} molecules. Skipped: {skipped}")
-        if len(data_list) == 0:
-            raise RuntimeError("No molecules processed successfully.")
-            
-        data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
 
-def get_dataloaders(root_dir='./data/qm9', batch_size=64, val_split=0.1, num_workers=4):
+def get_split(n, root_dir='./data/qm9', seed=42, val_frac=0.05, test_frac=0.10):
+    """Deterministic train/val/test indices, cached to disk so every script sees the same split."""
+    path = os.path.join(root_dir, f'split_seed{seed}.pt')
+    if os.path.exists(path):
+        split = torch.load(path, weights_only=True)
+        if sum(len(v) for v in split.values()) == n:
+            return split
+    perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed))
+    n_val, n_test = int(n * val_frac), int(n * test_frac)
+    split = {'test': perm[:n_test], 'val': perm[n_test:n_test + n_val], 'train': perm[n_test + n_val:]}
+    torch.save(split, path)
+    return split
+
+
+def get_datasets(root_dir='./data/qm9', seed=42, normalize=True):
+    """Returns (train, val, test) datasets and the train-set gap mean/std (eV).
+    If normalize=True, `y` is standardized with the train statistics."""
     dataset = QM9FlowDataset(root=root_dir)
-    
-    # Use recommended access to attributes to suppress warnings
-    y_all = dataset.y
-    y_mean, y_std = y_all.mean(), y_all.std()
-    # Apply normalization to the internal tensor
-    dataset._data.y = (y_all - y_mean) / y_std
-    
-    dataset = dataset.shuffle()
-    val_size = int(len(dataset) * val_split)
-    train_dataset = dataset[val_size:]
-    val_dataset = dataset[:val_size]
-    
-    # Adding num_workers to saturate GPU
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    
+    split = get_split(len(dataset), root_dir, seed)
+    y = dataset._data.y
+    y_mean, y_std = y[split['train']].mean().item(), y[split['train']].std().item()
+    if normalize:
+        dataset._data.y = (y - y_mean) / y_std
+    return dataset[split['train']], dataset[split['val']], dataset[split['test']], y_mean, y_std
+
+
+def get_dataloaders(root_dir='./data/qm9', batch_size=64, num_workers=4, seed=42):
+    train_ds, val_ds, _, y_mean, y_std = get_datasets(root_dir, seed)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              num_workers=num_workers, persistent_workers=num_workers > 0)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader, y_mean, y_std
 
+
 if __name__ == "__main__":
-    dataset = QM9FlowDataset(root="./data/qm9")
-    print(f"Success. Dataset size: {len(dataset)}")
+    train_ds, val_ds, test_ds, m, s = get_datasets()
+    print(f"train {len(train_ds)} | val {len(val_ds)} | test {len(test_ds)} | gap {m:.3f} ± {s:.3f} eV")
