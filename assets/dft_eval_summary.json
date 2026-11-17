@@ -1,0 +1,32 @@
+{
+  "4.2": {
+    "n": 64,
+    "dft_gap_mean": 5.0774188982215716,
+    "dft_gap_std": 0.9166453637887056,
+    "dft_mae_to_target": 1.029970900417039,
+    "frac_within_0.5eV": 0.3125,
+    "frac_within_1eV": 0.578125,
+    "frac_unchanged_graph_no_OO": 0.984375,
+    "dft_mae_to_target_unchanged_only": 1.0192569817564143
+  },
+  "6.8": {
+    "n": 64,
+    "dft_gap_mean": 6.610852131866101,
+    "dft_gap_std": 1.2087923658076007,
+    "dft_mae_to_target": 1.035847788681065,
+    "frac_within_0.5eV": 0.25,
+    "frac_within_1eV": 0.546875,
+    "frac_unchanged_graph_no_OO": 0.96875,
+    "dft_mae_to_target_unchanged_only": 1.0252080142626288
+  },
+  "9.4": {
+    "n": 64,
+    "dft_gap_mean": 8.51286050086155,
+    "dft_gap_std": 0.9322976832598254,
+    "dft_mae_to_target": 0.9756330897493453,
+    "frac_within_0.5eV": 0.328125,
+    "frac_within_1eV": 0.65625,
+    "frac_unchanged_graph_no_OO": 0.921875,
+    "dft_mae_to_target_unchanged_only": 0.96353081916187
+  }
+}
