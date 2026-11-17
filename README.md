@@ -1,4 +1,4 @@
-# nano-flow
+# nano-flow-mol
 
 **A minimal flow-matching model that generates 3D molecules with a target HOMO-LUMO gap, validated with DFT.**
 
