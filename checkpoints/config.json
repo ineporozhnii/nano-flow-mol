@@ -1,0 +1,17 @@
+{
+    "epochs": 500,
+    "batch_size": 256,
+    "hidden_dim": 128,
+    "num_layers": 6,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "prior_scale": 0.5,
+    "ema_decay": 0.999,
+    "max_nodes": 29,
+    "num_workers": 4,
+    "seed": 42,
+    "in_node_dim": 5,
+    "learning_rate": 0.001,
+    "y_mean": 6.832852840423584,
+    "y_std": 1.2959983348846436
+}
